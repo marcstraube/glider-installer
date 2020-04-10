@@ -31,11 +31,6 @@ shred_disk="true"
 # Iterations of disk shredding. Only needed if shred_disk="true".
 shred_iterations=1
 
-# Needed for disks which put a prefix between disk name and partition
-# number, e.g. nvme disk /dev/nvme0n1 needs partiton_prefix="p".
-#
-partition_prefix=""
-
 # normal: Unencrypted installation with LVM
 # encrypted: Encrypted installation with LVM on LUKS
 # encrypted_boot: Encrypted installation with LVM on LUKS and encrypted
@@ -99,6 +94,13 @@ root_password="toor"
 #############   !Do not change anything after this line!   #############
 ########################################################################
 network_type="wired"
+
+if [ "${disk:5:4}" == "nvme" ]; then
+  partition_prefix="p"
+else
+  partition_prefix=""
+fi
+
 efi_partition="${disk}${partition_prefix}1"
 boot_partition="${disk}${partition_prefix}2"
 root_partition="${disk}${partition_prefix}3"
