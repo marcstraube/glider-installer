@@ -352,12 +352,16 @@ install_system() {
   fi
 
   if [ "${multilib}" = "true" ]; then
-    printf "Activating multilib repository\n"
     sed -e 's/^#\[multilib]/\[multilib]/g' \
         -e '/^\[multilib]/{N;s/\n#/\n/}' -i /etc/pacman.conf
   fi
 
   pacstrap /mnt ${packages}
+
+  if [ "${multilib}" = "true" ]; then
+    sed -e 's/^#\[multilib]/\[multilib]/g' \
+        -e '/^\[multilib]/{N;s/\n#/\n/}' -i /mnt/etc/pacman.conf
+  fi
 }
 
 generate_fstab() {
