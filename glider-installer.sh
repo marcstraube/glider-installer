@@ -9,13 +9,16 @@ set -o nounset
 
 ### Install variables
 
-# cable or wifi
-network_type="cable"
+# The following variables are only needed, if you want to setup a
+# wireless connection.
+#
+wifi_ssid=""
+wifi_password=""
 
-# The following variables are only needed, if network_type="wifi"
-wifi_device="wlp2s0"
-wifi_ssid="MyWiFi"
-wifi_password="wifi_password"
+# Set this value if you have multiple wireless devices and want to use a
+# specific one. Otherwise the first device will be used.
+#
+wifi_device=""
 
 # The disk where the system gets installed. Be warned that the whole
 # disk will be wiped!
@@ -23,7 +26,7 @@ wifi_password="wifi_password"
 disk="/dev/sda"
 
 # Set to true if the disk should be shredded.
-shred_disk="false"
+shred_disk="true"
 
 # Iterations of disk shredding. Only needed if shred_disk="true".
 shred_iterations=1
@@ -95,7 +98,7 @@ root_password="toor"
 ########################################################################
 #############   !Do not change anything after this line!   #############
 ########################################################################
-
+network_type="wired"
 efi_partition="${disk}${partition_prefix}1"
 boot_partition="${disk}${partition_prefix}2"
 root_partition="${disk}${partition_prefix}3"
@@ -106,33 +109,54 @@ set_keymap() {
   loadkeys de-latin1
 }
 
-connect_wifi() {
-  printf "Connecting to wifi network ${wifi_ssid}.\n"
-
-  wpa_passphrase ${wifi_ssid} ${wifi_password} > /etc/wpa_supplicant/wpa_supplicant.conf
-  wpa_supplicant -i ${wifi_device} -D wext -c /etc/wpa_supplicant/wpa_supplicant.conf -B
-  dhcpcd ${wifi_device}
-}
-
 check_network() {
   printf "Checking network connection.\n"
-
-  if [ "${network_type}" == "wifi" ]; then
-    for ((i=1; i<=3; i++)); do
-      if [[ $(ping -c 1 archlinux.org) ]]; then
-        return
-      else
-        sleep 5
-      fi
-    done
-  else
-    if [[ $(ping -c 1 archlinux.org) ]]; then
-      return
+  
+  if [[ "${wifi_ssid}" != "" && "${wifi_password}" != ""  ]]; then
+    if [ "${wifi_device}" == "" ]; then
+      detect_wifi_device_name
+    fi
+    
+    if [ "${wifi_device}" != "" ]; then
+      connect_wifi
     fi
   fi
 
+  for ((i=1; i<=3; i++)); do
+    if [[ $(ping -c 1 archlinux.org) ]]; then
+      return
+    else
+      sleep 5
+    fi
+  done
+
   printf "No network connection possible. Exiting.\n"
   exit 1
+}
+
+detect_wifi_device_name() {
+  local count=0
+  
+  for dev in `ls /sys/class/net`; do
+    if [[ -d "/sys/class/net/${dev}/wireless" && ${count} == 0 ]]; then
+      wifi_device="${dev}"
+      count=$((count+1))
+    fi
+  done
+}
+
+get_wifi_udev_name() {
+  local udev_name="$(udevadm test-builtin net_id /sys/class/net/${wifi_device} | grep 'ID_NET_NAME_PATH')"
+  echo ${udev_name/*=/}
+}
+
+connect_wifi() {
+  printf "Connecting to wifi network ${wifi_ssid}.\n"
+
+  wpa_passphrase ${wifi_ssid} ${wifi_password} > /etc/wpa_supplicant/wpa_supplicant-$(get_wifi_udev_name).conf
+  wpa_supplicant -i ${wifi_device} -D wext -c /etc/wpa_supplicant/wpa_supplicant-$(get_wifi_udev_name).conf -B
+  dhcpcd ${wifi_device}
+  network_type="wifi"
 }
 
 update_system_clock() {
@@ -345,7 +369,8 @@ generate_fstab() {
 install_wifi_config() {
   printf "Installing wifi config.\n"
 
-  cp /etc/wpa_supplicant/wpa_supplicant.conf /mnt/etc/wpa_supplicant/wpa_supplicant.conf
+  cp /etc/wpa_supplicant/wpa_supplicant-$(get_wifi_udev_name).conf \
+     /mnt/etc/wpa_supplicant/wpa_supplicant-$(get_wifi_udev_name).conf
 }
 
 chroot_install() {
@@ -356,7 +381,7 @@ chroot_install() {
 }
 
 set_timezone() {
-  printf "Setting timezone to ${timezone}"
+  printf "Setting timezone to ${timezone}.\n"
 
   ln -sf /usr/share/zoneinfo/${timezone} /etc/localtime
 
@@ -365,7 +390,7 @@ set_timezone() {
 }
 
 set_localization() {
-  printf "Localizing system \n"
+  printf "Localizing system.\n"
 
   sed -r "s/^#(en_US.UTF-8.*)$/\1/g" -i /etc/locale.gen
   sed -r "s/^#(${locale}.*)$/\1/g" -i /etc/locale.gen
@@ -377,7 +402,7 @@ set_localization() {
 }
 
 config_network() {
-    printf "Configuring network \n"
+    printf "Configuring network.\n"
 
     echo "${hostname}" > /etc/hostname
     echo "127.0.0.1    localhost" >> /etc/hosts
@@ -389,6 +414,24 @@ config_network() {
     echo "ff02::1      ip6-allnodes" >> /etc/hosts
     echo "ff02::2      ip6-allrouters" >> /etc/hosts
     echo "ff02::3      ip6-allhosts" >> /etc/hosts
+}
+
+enable_network_services() {
+  printf "Enabling network services.\n"
+  
+  ln -sf /usr/lib/systemd/system/dhcpcd.service \
+         /etc/systemd/system/multi-user.target.wants/dhcpcd.service
+
+  if [[ "${wifi_ssid}" != "" && "${wifi_password}" != ""  ]]; then
+    if [ "${wifi_device}" == "" ]; then
+      detect_wifi_device_name
+    fi
+  fi
+  
+  if [ "${wifi_device}" != "" ]; then
+    ln -sf /usr/lib/systemd/system/wpa_supplicant@.service \
+           /etc/systemd/system/multi-user.target.wants/wpa_supplicant@$(get_wifi_udev_name).service
+  fi
 }
 
 create_crypto_keyfile() {
@@ -472,11 +515,6 @@ finish() {
 
 setup() {
   set_keymap
-
-  if [ "${network_type}" == "wifi" ]; then
-    connect_wifi
-  fi
-
   check_network
   update_system_clock
 
@@ -514,6 +552,7 @@ setup_chroot() {
   fi
 
   config_network
+  enable_network_services
   create_initramfs
 
   if [ "${install_type}" == "encrypted_boot" ]; then
